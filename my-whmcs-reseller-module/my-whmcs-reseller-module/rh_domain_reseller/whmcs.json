@@ -1,0 +1,25 @@
+{
+  "schema": "1.0",
+  "type": "whmcs-registrars",
+  "name": "realhostpro",
+  "license": "proprietary",
+  "category": "domains",
+  "description": {
+    "name": "Realhostpro",
+    "tagline": "A global ICANN-accredited registrar and domain resale provider.",
+    "long": ""
+  },
+  "logo": {
+    "filename": "https://realhostpro.com/assets/img/logo.png"
+  },
+  "support": {
+    "homepage": "https:\/\/www.realhostpro.com\/",
+    "docs_url": "https:\/\/www.realhostpro.com\/"
+  },
+  "authors": [
+    {
+      "name": "Realhost Inc",
+      "homepage": "https://www.realhostpro.com/"
+    }
+  ]
+}
