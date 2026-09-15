@@ -428,9 +428,7 @@ function rh_hosting_reseller_AdminServicesTabFields(array $params): array
     $serviceId = $params['serviceid'] ?? 0;
     $parentServiceId = null;
 
-    // 1. Fetch directly from WHMCS database to bypass stale $params memory cache
     if ($serviceId && class_exists('WHMCS\Database\Capsule')) {
-        // Find the custom field ID for 'parent_service_id' linked to this product
         $fieldId = WHMCS\Database\Capsule::table('tblcustomfields')
             ->where('type', 'product')
             ->where('relid', $params['packageid'] ?? 0)
@@ -445,7 +443,6 @@ function rh_hosting_reseller_AdminServicesTabFields(array $params): array
         }
     }
 
-    // Fallback to params if database lookup missed
     if (empty($parentServiceId)) {
         $parentServiceId = $params['customfields']['parent_service_id'] ?? null;
     }
@@ -465,119 +462,160 @@ function rh_hosting_reseller_AdminServicesTabFields(array $params): array
     }
 
     return [
-        'Parent Service ID'  => $svc['id']          ?? $parentServiceId,
-        'Parent Domain'      => $svc['domain']      ?? '—',
-        'Parent Username'      => $svc['username']      ?? '—',
-        'Parent Password'      => $svc['password']      ?? '—',
-        'Parent Status'      => $svc['status']      ?? '—',
-        'Parent Package'     => $svc['name']        ?? '—',
-        'Parent Next Due'    => $svc['nextduedate'] ?? '—',
+        'Parent Service ID'   => $svc['id']           ?? $parentServiceId,
+        'Parent Type'         => strtoupper($svc['service_type'] ?? 'HOSTING'),
+        'Parent Group'        => $svc['groupname']    ?? '—',
+        'Parent Domain'       => $svc['domain']       ?? '—',
+        'Parent Username'     => $svc['username']     ?? '—',
+        'Parent Password'     => $svc['password']     ?? '—',
+        'Parent Status'       => $svc['status']       ?? '—',
+        'Parent Package'      => $svc['name']         ?? '—',
+        'Parent Next Due'     => $svc['nextduedate']  ?? '—',
     ];
 }
-
 /**
  * ClientArea — Renders custom service management templates based on product type.
  */
-function rh_hosting_reseller_ClientArea(array $params): array
+ function rh_hosting_reseller_ClientArea(array $params): array
 {
-    try {
-        $server    = _rh_hosting_getServer($params);
-        $token     = _rh_hosting_getToken($server);
-        $serviceid = $params['customfields']['parent_service_id'] ?? null;
+    $serviceId = (int)($params['serviceid'] ?? 0);
+    $parentServiceId = null;
 
-        if (!$token || !$serviceid) {
-            return [
-                'tabOverviewReplacement' => '<div class="alert alert-info">Service setup is pending or initializing. Please check back shortly.</div>'
-            ];
+    // 1. Resolve parent_service_id (custom field first, fallback to params)
+    if ($serviceId && class_exists('WHMCS\Database\Capsule')) {
+        $fieldId = WHMCS\Database\Capsule::table('tblcustomfields')
+            ->where('type', 'product')
+            ->where('relid', $params['packageid'] ?? 0)
+            ->where('fieldname', 'LIKE', '%parent_service_id%')
+            ->value('id');
+
+        if ($fieldId) {
+            $parentServiceId = WHMCS\Database\Capsule::table('tblcustomfieldsvalues')
+                ->where('fieldid', $fieldId)
+                ->where('relid', $serviceId)
+                ->value('value');
         }
+    }
 
-        // Fetch live service details from the parent panel
-        $resp = _rh_hosting_call($server, 'getServiceDetails', ['serviceid' => $serviceid], true, $token);
-        $svc  = $resp['service'] ?? [];
+    if (empty($parentServiceId)) {
+        $parentServiceId = $params['customfields']['parent_service_id'] ?? null;
+    }
 
-        if (empty($svc)) {
-            return [
-                'tabOverviewReplacement' => '<div class="alert alert-warning">Unable to load service details at this moment.</div>'
-            ];
-        }
+    $server = _rh_hosting_getServer($params);
+    $token  = _rh_hosting_getToken($server);
 
-        // Normalize values
-$groupName   = strtolower(trim($svc['groupname'] ?? ''));
-$productType = strtolower(trim($svc['producttype'] ?? ''));
-$productName = strtolower(trim($svc['name'] ?? ''));
-
-$templateFile = 'hosting.tpl'; // Default
-
-/*
-|--------------------------------------------------------------------------
-| VPS / Dedicated / Cloud
-|--------------------------------------------------------------------------
-*/
-if (
-    in_array($productType, ['server', 'vps', 'dedicated', 'cloud'], true) ||
-    str_contains($groupName, 'vps') ||
-    str_contains($groupName, 'cloud') ||
-    str_contains($groupName, 'dedicated') ||
-    str_contains($productName, 'vps') ||
-    str_contains($productName, 'dedicated') ||
-    str_contains($productName, 'server')
-) {
-    $templateFile = 'vps.tpl';
-}
-
-/*
-|--------------------------------------------------------------------------
-| License Products
-|--------------------------------------------------------------------------
-*/
-elseif (
-    in_array($productType, ['license', 'licensing'], true) ||
-    str_contains($groupName, 'license') ||
-    str_contains($groupName, 'licensing') ||
-    str_contains($groupName, 'cpanel license') ||
-    str_contains($groupName, 'plesk') ||
-    str_contains($groupName, 'softaculous') ||
-    str_contains($productName, 'license') ||
-    str_contains($productName, 'cpanel') ||
-    str_contains($productName, 'plesk') ||
-    str_contains($productName, 'softaculous')
-) {
-    $templateFile = 'license.tpl';
-}
-
-/*
-|--------------------------------------------------------------------------
-| Hosting / Reseller
-|--------------------------------------------------------------------------
-*/
-elseif (
-    in_array($productType, ['hostingaccount', 'reselleraccount', 'hosting', 'reseller'], true) ||
-    str_contains($groupName, 'hosting') ||
-    str_contains($groupName, 'shared') ||
-    str_contains($groupName, 'reseller') ||
-    str_contains($productName, 'hosting') ||
-    str_contains($productName, 'shared') ||
-    str_contains($productName, 'reseller')
-) {
-    $templateFile = 'hosting.tpl';
-}
-
-        // Pass variables securely to the template file
+    if (!$token) {
         return [
-            'templatefile' => 'templates/' . $templateFile,
-            'vars'         => [
-                'parentService'   => $svc,
-                'serviceDomain'   => $params['domain'],
-                'serviceUsername' => $svc['username'] ?? '',
-                'servicePassword' => $svc['password'] ?? '',
-                'serverIp'        => $svc['serverip'] ?? '',
-                'serverHostname'  => $svc['serverhostname'] ?? '',
-            ],
-        ];
-
-    } catch (\Exception $e) {
-        return [
-            'tabOverviewReplacement' => '<div class="alert alert-danger">An error occurred while loading your service dashboard.</div>'
+            'templatefile' => 'templates/error',
+            'vars'         => ['error' => 'Could not authenticate with the master server. Please contact support.'],
         ];
     }
+
+    if (!$parentServiceId) {
+        return [
+            'templatefile' => 'templates/error',
+            'vars'         => ['error' => 'This service is not linked to a parent account. Please contact support.'],
+        ];
+    }
+
+    $resp = _rh_hosting_call($server, 'getServiceDetails', ['serviceid' => $parentServiceId], true, $token);
+    $svc  = $resp['service'] ?? null;
+
+    if (!$svc) {
+        return [
+            'templatefile' => 'templates/error',
+            'vars'         => ['error' => 'Could not load service details from the server. Please try again shortly.'],
+        ];
+    }
+
+    // 2. Determine which template to render
+    $serviceType = strtolower(trim($svc['service_type'] ?? ($resp['service_type'] ?? 'hosting')));
+
+    $allowedTemplates = [
+        'hosting' => 'templates/hosting',
+        'vps'     => 'templates/vps',
+        'license' => 'templates/license',
+    ];
+
+    // Fall back to the dedicated default.tpl for unmapped/unknown service types
+    $templateFile = $allowedTemplates[$serviceType] ?? 'templates/default';
+
+    $typeLabels = [
+        'hosting' => 'Hosting Account',
+        'vps'     => 'Virtual Private Server',
+        'license' => 'License',
+    ];
+
+    // 3. Live account status (from the remote/parent account)
+    $accountStatus = (string)($svc['status'] ?? 'Unknown');
+    $accountActive = strtolower($accountStatus) === 'active';
+
+    // 4. Resource usage (guard against unlimited/zero limits)
+    $diskUsage = (float)($svc['diskusage'] ?? 0);
+    $diskLimit = (float)($svc['disklimit'] ?? 0);
+    $bwUsage   = (float)($svc['bwusage'] ?? 0);
+    $bwLimit   = (float)($svc['bwlimit'] ?? 0);
+
+    $diskPercent = $diskLimit > 0 ? (int)min(100, round(($diskUsage / $diskLimit) * 100)) : null;
+    $bwPercent   = $bwLimit > 0 ? (int)min(100, round(($bwUsage / $bwLimit) * 100)) : null;
+
+    // 5. Control panel login URLs (only build them when we actually have a hostname)
+    $hostname  = $svc['serverhostname'] ?? '';
+    $cpanelUrl = $hostname ? 'https://' . $hostname . ':2083/login/' : '';
+    $whmUrl    = $hostname ? 'https://' . $hostname . ':2087/login/' : '';
+
+    $isReseller = (strtolower($svc['hostingtype'] ?? '') === 'reseller')
+        || (stripos($svc['groupname'] ?? '', 'reseller') !== false);
+
+    // 6. WHMCS-native service info belongs to the *child* (billed) service, not
+    //    the remote account — pull it from $params first, fall back to $svc.
+    $serviceName         = $params['packagename'] ?? ($svc['name'] ?? ($typeLabels[$serviceType] ?? 'Service'));
+    $serviceBillingCycle = $params['billingcycle'] ?? ($svc['billingcycle'] ?? '');
+    $serviceRegDate      = $params['regdate'] ?? ($svc['regdate'] ?? '');
+    $serviceNextDueDate  = $params['nextduedate'] ?? ($svc['nextduedate'] ?? '');
+    $serviceNotes        = $svc['notes'] ?? '';
+
+    return [
+        'templatefile' => $templateFile,
+        'vars'         => [
+            // raw payload, kept for anything not explicitly mapped below
+            'parentService' => $svc,
+
+            'service_type'     => $serviceType,
+            'serviceTypeLabel' => $typeLabels[$serviceType] ?? 'Service',
+
+            // WHMCS-native (child/billed) service details
+            'serviceName'         => $serviceName,
+            'serviceBillingCycle' => $serviceBillingCycle ? ucfirst($serviceBillingCycle) : 'N/A',
+            'serviceRegDate'      => $serviceRegDate ?: 'N/A',
+            'serviceNextDueDate'  => $serviceNextDueDate ?: 'N/A',
+            'serviceNotes'        => $serviceNotes,
+
+            // Live remote account details
+            'serviceDomain'   => htmlspecialchars($params['domain'] ?? '', ENT_QUOTES),
+            'serviceUsername' => htmlspecialchars($svc['username'] ?? '', ENT_QUOTES),
+            'servicePassword' => htmlspecialchars($svc['password'] ?? '', ENT_QUOTES),
+            'serverIp'        => htmlspecialchars($svc['serverip'] ?? '', ENT_QUOTES),
+            'serverHostname'  => htmlspecialchars($hostname, ENT_QUOTES),
+
+            'accountStatus' => $accountStatus,
+            'accountActive' => $accountActive,
+
+            'diskusage'   => $diskUsage,
+            'disklimit'   => $diskLimit,
+            'diskPercent' => $diskPercent,
+            'bwusage'     => $bwUsage,
+            'bwlimit'     => $bwLimit,
+            'bwPercent'   => $bwPercent,
+
+            'ns1' => $svc['ns1'] ?? '',
+            'ns2' => $svc['ns2'] ?? '',
+
+            'licensekey' => $svc['licensekey'] ?? '',
+
+            'cpanelUrl'  => $cpanelUrl,
+            'whmUrl'     => $whmUrl,
+            'isReseller' => $isReseller,
+        ],
+    ];
 }
